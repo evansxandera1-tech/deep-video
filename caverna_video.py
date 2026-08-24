@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-caverna-video v1.1
+caverna-video v1.3
 Flujo completo: toma un audio ya generado (caverna-audio), lo transcribe con
 Whisper para tener timing exacto, arma escenas, genera/reutiliza imágenes
-(stickman + fondo prehistórico) con Pollinations, arma el video final con
-ffmpeg (imágenes + audio + subtítulos quemados) y sube todo a Drive vía rclone.
+(stickman + fondo prehistórico) con Pollinations (con fallback a Hugging
+Face FLUX si Pollinations falla), arma el video final con ffmpeg (imágenes +
+audio + subtítulos quemados) y sube todo a Drive vía rclone.
 
 Carpetas remotas usadas (remoto rclone "gdrive"):
   caverna-audio      -> origen: audios ya generados
@@ -43,6 +44,7 @@ GROQ_API_KEYS = [
 GROQ_API_KEYS = [k for k in GROQ_API_KEYS if k]  # descarta vacías
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 POLLINATIONS_TOKEN = os.environ.get("POLLINATIONS_TOKEN", "")  # opcional
+HF_API_TOKEN = os.environ.get("HF_API_TOKEN", "")  # fallback si Pollinations falla
 LIMITE_DEMO_SEGUNDOS = int(os.environ.get("LIMITE_DEMO_SEGUNDOS", "0")) or None  # ej: 300 = 5 min
 
 DURACION_ESCENA_OBJETIVO = 12  # segundos, objetivo (no fijo)
@@ -331,6 +333,54 @@ def generar_imagen_pollinations(prompt, imagen_referencia_path, salida_path):
     return bool(resultado)
 
 
+# ---------- paso 6b: fallback con Hugging Face (FLUX Kontext) si Pollinations falla ----------
+
+HF_MODELO = "black-forest-labs/FLUX.1-Kontext-dev"
+
+
+def generar_imagen_huggingface(prompt, imagen_referencia_path, salida_path):
+    """Fallback cuando Pollinations no responde. Usa FLUX.1-Kontext-dev, que
+    sí soporta imagen de referencia (mismo tipo de modelo que Pollinations
+    usa con 'kontext'), así se respeta el estilo/personaje de referencia."""
+    if not HF_API_TOKEN:
+        log.warning("HF_API_TOKEN no configurada, no se puede usar el fallback de Hugging Face")
+        return False
+
+    url = f"https://router.huggingface.co/hf-inference/models/{HF_MODELO}"
+    headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
+    payload = {"inputs": prompt, "parameters": {}}
+
+    if imagen_referencia_path:
+        img_r = requests.get(imagen_referencia_path, timeout=60)
+        img_r.raise_for_status()
+        import base64
+        payload["parameters"]["image"] = base64.b64encode(img_r.content).decode()
+
+    def _pedir():
+        r = requests.post(url, headers=headers, json=payload, timeout=180)
+        if not r.ok:
+            log.error(f"Hugging Face respuesta cruda: status={r.status_code} body={r.text[:300]}")
+        r.raise_for_status()
+        content_type = r.headers.get("content-type", "")
+        if "image" not in content_type:
+            raise RuntimeError(f"respuesta sin imagen (content-type={content_type})")
+        with open(salida_path, "wb") as f:
+            f.write(r.content)
+        return True
+
+    resultado = con_reintentos(_pedir, intentos=3, espera_base=20, nombre="Hugging Face generar imagen")
+    return bool(resultado)
+
+
+def generar_imagen(prompt, imagen_referencia_path, salida_path):
+    """Intenta Pollinations primero; si falla, cae a Hugging Face (mismo
+    modelo Kontext, respeta imagen de referencia)."""
+    if generar_imagen_pollinations(prompt, imagen_referencia_path, salida_path):
+        return True
+    log.warning("Pollinations falló, probando fallback con Hugging Face (Kontext)")
+    return generar_imagen_huggingface(prompt, imagen_referencia_path, salida_path)
+
+
 # ---------- paso 7: armar video con ffmpeg ----------
 
 def segundos_a_srt_ts(s):
@@ -423,7 +473,7 @@ def main():
             prompt = PROMPT_ESTILO.format(accion=accion, fondo_extra=fondo_extra)
             log.info(f"Escena {i}: sin match, genera fondo nuevo ('{fondo_nuevo}') | acción: {accion}")
 
-        ok = generar_imagen_pollinations(prompt, referencia_url, salida)
+        ok = generar_imagen(prompt, referencia_url, salida)
         if ok:
             imagenes.append(salida)
         else:
