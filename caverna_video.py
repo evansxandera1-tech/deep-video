@@ -47,7 +47,7 @@ POLLINATIONS_TOKEN = os.environ.get("POLLINATIONS_TOKEN", "")  # opcional
 HF_API_TOKEN = os.environ.get("HF_API_TOKEN", "")  # fallback si Pollinations falla
 LIMITE_DEMO_SEGUNDOS = int(os.environ.get("LIMITE_DEMO_SEGUNDOS", "0")) or None  # ej: 300 = 5 min
 
-DURACION_ESCENA_OBJETIVO = 12  # segundos, objetivo (no fijo)
+DURACION_ESCENA_OBJETIVO = 3  # segundos, objetivo (no fijo)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -209,6 +209,8 @@ def guardar_descripciones(desc):
 
 
 def describir_imagen_gemini(imagen_path):
+    if not GEMINI_API_KEY:
+        return ""
     import base64
     with open(imagen_path, "rb") as f:
         b64 = base64.b64encode(f.read()).decode()
