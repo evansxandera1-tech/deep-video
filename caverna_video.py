@@ -111,9 +111,11 @@ def rclone_link(ruta_remota_archivo):
         return None
     link = r.stdout.strip()
     # convierte el link de "ver" de Drive a un link de descarga directa
-    m = re.search(r"/d/([a-zA-Z0-9_-]+)", link)
+    # cubre tanto /d/XXXX/view como open?id=XXXX
+    m = re.search(r"/d/([a-zA-Z0-9_-]+)", link) or re.search(r"[?&]id=([a-zA-Z0-9_-]+)", link)
     if m:
         return f"https://drive.google.com/uc?export=download&id={m.group(1)}"
+    log.warning(f"rclone link con formato no reconocido, se usa tal cual: {link}")
     return link
 
 
