@@ -34,9 +34,16 @@ WORK_DIR = "trabajo"
 LOG_FILE = "caverna_video.log"
 DESCRIPCIONES_LOCAL = os.path.join(WORK_DIR, "descripciones.json")
 
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_API_KEYS = [
+    os.environ.get("GROQ_API_KEY_1", ""),
+    os.environ.get("GROQ_API_KEY_2", ""),
+    os.environ.get("GROQ_API_KEY_3", ""),
+    os.environ.get("GROQ_API_KEY_4", ""),
+]
+GROQ_API_KEYS = [k for k in GROQ_API_KEYS if k]  # descarta vacías
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 POLLINATIONS_TOKEN = os.environ.get("POLLINATIONS_TOKEN", "")  # opcional
+LIMITE_DEMO_SEGUNDOS = int(os.environ.get("LIMITE_DEMO_SEGUNDOS", "0")) or None  # ej: 300 = 5 min
 
 DURACION_ESCENA_OBJETIVO = 12  # segundos, objetivo (no fijo)
 
@@ -51,15 +58,28 @@ logging.basicConfig(
 log = logging.getLogger("caverna-video")
 
 
+# ---------- utilidad de reintentos ----------
+
+def con_reintentos(func, intentos=3, espera_base=5, nombre=""):
+    """Corre func() hasta `intentos` veces, con espera creciente (5s, 10s, 20s...)
+    entre cada intento. Devuelve el resultado o None si todos fallan."""
+    for intento in range(1, intentos + 1):
+        try:
+            return func()
+        except Exception as e:
+            if intento == intentos:
+                log.error(f"{nombre}: falló tras {intentos} intentos: {e}")
+                return None
+            espera = espera_base * (2 ** (intento - 1))
+            log.warning(f"{nombre}: intento {intento}/{intentos} falló ({e}), reintenta en {espera}s")
+            time.sleep(espera)
+
+
 # ---------- utilidades rclone ----------
 
 def rclone_lsf(ruta):
     r = subprocess.run(["rclone", "lsf", ruta], capture_output=True, text=True)
     if r.returncode != 0:
-        if "directory not found" in r.stderr:
-            log.warning(f"Carpeta no existe, creando: {ruta}")
-            subprocess.run(["rclone", "mkdir", ruta], capture_output=True, text=True)
-            return []
         log.error(f"rclone lsf falló en {ruta}: {r.stderr.strip()}")
         return []
     return [l.strip() for l in r.stdout.splitlines() if l.strip()]
@@ -95,6 +115,16 @@ def rclone_link(ruta_remota_archivo):
     return link
 
 
+def recortar_audio_demo(audio_path, segundos):
+    """Recorta el audio a los primeros `segundos` segundos, para pruebas."""
+    recortado = audio_path.replace(".mp3", "_recorte.mp3")
+    subprocess.run([
+        "ffmpeg", "-y", "-i", audio_path, "-t", str(segundos),
+        "-c", "copy", recortado
+    ], check=True, capture_output=True)
+    return recortado
+
+
 # ---------- paso 1: elegir audio pendiente ----------
 
 def elegir_audio_pendiente():
@@ -104,6 +134,29 @@ def elegir_audio_pendiente():
     if not pendientes:
         return None
     return pendientes[0]
+
+
+def elegir_audio_demo():
+    """En modo demo siempre usa el mismo audio: lo guarda la primera vez en un
+    marcador en Drive y lo reutiliza en corridas futuras, sin importar el
+    estado de caverna-videos."""
+    marcador_local = os.path.join(WORK_DIR, "demo_audio_elegido.txt")
+    if rclone_copyto(f"{CARPETA_AUDIO}/.demo_audio_elegido.txt", marcador_local):
+        with open(marcador_local, "r", encoding="utf-8") as f:
+            nombre = f.read().strip()
+        if nombre:
+            log.info(f"Modo demo: reutilizando audio ya elegido antes: {nombre}")
+            return nombre
+
+    audios = [a for a in rclone_lsf(CARPETA_AUDIO) if a.lower().endswith(".mp3")]
+    if not audios:
+        return None
+    nombre = audios[0]
+    with open(marcador_local, "w", encoding="utf-8") as f:
+        f.write(nombre)
+    rclone_copyto(marcador_local, f"{CARPETA_AUDIO}/.demo_audio_elegido.txt")
+    log.info(f"Modo demo: eligiendo audio por primera vez: {nombre}")
+    return nombre
 
 
 # ---------- paso 2: transcribir con whisper ----------
@@ -164,14 +217,15 @@ def describir_imagen_gemini(imagen_path):
             ]
         }]
     }
-    try:
+    def _pedir():
         r = requests.post(url, json=payload, timeout=60)
+        if not r.ok:
+            log.error(f"Gemini respuesta cruda: status={r.status_code} body={r.text[:500]}")
         r.raise_for_status()
-        texto = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-        return texto
-    except Exception as e:
-        log.error(f"Error describiendo imagen con Gemini: {e}")
-        return ""
+        return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+    resultado = con_reintentos(_pedir, nombre="Gemini describir imagen")
+    return resultado or ""
 
 
 def actualizar_banco_fondos():
@@ -199,12 +253,30 @@ def actualizar_banco_fondos():
 # ---------- paso 5: prompt de escena + elegir fondo o generar nuevo (Groq) ----------
 
 def groq_chat(mensajes, modelo="openai/gpt-oss-120b"):
+    """Prueba cada key de Groq en orden; si una da error (límite, etc.) pasa a la
+    siguiente. Cada key individual también tiene sus propios reintentos."""
     url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {"model": modelo, "messages": mensajes, "temperature": 0.7}
-    r = requests.post(url, headers=headers, json=payload, timeout=60)
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"].strip()
+
+    if not GROQ_API_KEYS:
+        raise RuntimeError("No hay ninguna GROQ_API_KEY configurada")
+
+    for idx, key in enumerate(GROQ_API_KEYS, start=1):
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+
+        def _pedir():
+            r = requests.post(url, headers=headers, json=payload, timeout=60)
+            if not r.ok:
+                log.error(f"Groq key #{idx} respuesta cruda: status={r.status_code} body={r.text[:500]}")
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"]["content"].strip()
+
+        resultado = con_reintentos(_pedir, intentos=2, espera_base=5, nombre=f"Groq key #{idx}")
+        if resultado is not None:
+            return resultado
+        log.warning(f"Groq key #{idx} agotada/falló, prueba con la siguiente")
+
+    raise RuntimeError("Groq no respondió con ninguna de las keys configuradas")
 
 
 def elegir_fondo_o_prompt(texto_escena, descripciones):
@@ -241,20 +313,22 @@ REFERENCIA_STICKMAN_NOMBRE = "referencia_stickman.jpg"  # debe existir en cavern
 
 def generar_imagen_pollinations(prompt, imagen_referencia_path, salida_path):
     params = {"model": "kontext", "width": 1024, "height": 576}
-    if POLLINATIONS_TOKEN:
-        params["token"] = POLLINATIONS_TOKEN
     if imagen_referencia_path:
         params["image"] = imagen_referencia_path  # debe ser URL pública
+    headers = {}
+    if POLLINATIONS_TOKEN:
+        headers["Authorization"] = f"Bearer {POLLINATIONS_TOKEN}"
     url = f"https://image.pollinations.ai/prompt/{quote(prompt)}"
-    try:
-        r = requests.get(url, params=params, timeout=120)
+
+    def _pedir():
+        r = requests.get(url, params=params, headers=headers, timeout=180)
         r.raise_for_status()
         with open(salida_path, "wb") as f:
             f.write(r.content)
         return True
-    except Exception as e:
-        log.error(f"Error generando imagen con Pollinations: {e}")
-        return False
+
+    resultado = con_reintentos(_pedir, intentos=3, espera_base=15, nombre="Pollinations generar imagen")
+    return bool(resultado)
 
 
 # ---------- paso 7: armar video con ffmpeg ----------
@@ -306,7 +380,7 @@ def main():
     log.info("=== Inicio caverna-video ===")
     os.makedirs(WORK_DIR, exist_ok=True)
 
-    nombre_audio = elegir_audio_pendiente()
+    nombre_audio = elegir_audio_demo() if LIMITE_DEMO_SEGUNDOS else elegir_audio_pendiente()
     if not nombre_audio:
         log.info("No hay audios pendientes. Fin.")
         return
@@ -316,6 +390,10 @@ def main():
     audio_local = os.path.join(WORK_DIR, nombre_audio)
     if not rclone_copyto(f"{CARPETA_AUDIO}/{nombre_audio}", audio_local):
         return
+
+    if LIMITE_DEMO_SEGUNDOS:
+        log.info(f"Modo demo: recortando a los primeros {LIMITE_DEMO_SEGUNDOS}s")
+        audio_local = recortar_audio_demo(audio_local, LIMITE_DEMO_SEGUNDOS)
 
     t1 = time.time()
     segmentos = transcribir(audio_local)
@@ -360,16 +438,17 @@ def main():
 
     rclone_copy(os.path.join(WORK_DIR, "escenas"), CARPETA_IMAGENES + f"/{base}")
 
-    srt_path = os.path.join(WORK_DIR, f"{base}.srt")
+    sufijo = "_demo" if LIMITE_DEMO_SEGUNDOS else ""
+    srt_path = os.path.join(WORK_DIR, f"{base}{sufijo}.srt")
     generar_srt(segmentos, srt_path)
 
     t4 = time.time()
-    video_path = os.path.join(WORK_DIR, f"{base}.mp4")
+    video_path = os.path.join(WORK_DIR, f"{base}{sufijo}.mp4")
     armar_video(escenas[:len(imagenes)], imagenes, audio_local, srt_path, video_path)
     log.info(f"Video armado, {time.time()-t4:.1f}s")
 
-    if rclone_copyto(video_path, f"{CARPETA_VIDEOS}/{base}.mp4"):
-        log.info(f"Subido: {base}.mp4 -> {CARPETA_VIDEOS}")
+    if rclone_copyto(video_path, f"{CARPETA_VIDEOS}/{base}{sufijo}.mp4"):
+        log.info(f"Subido: {base}{sufijo}.mp4 -> {CARPETA_VIDEOS}")
 
     log.info(f"=== Fin caverna-video, total {time.time()-t0:.1f}s ===")
 
