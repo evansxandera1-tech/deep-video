@@ -314,7 +314,8 @@ REFERENCIA_STICKMAN_NOMBRE = "referencia_stickman.jpg"  # debe existir en cavern
 
 
 def generar_imagen_pollinations(prompt, imagen_referencia_path, salida_path):
-    params = {"model": "kontext", "width": 1024, "height": 576}
+    modelo = "kontext" if imagen_referencia_path else "flux"
+    params = {"model": modelo, "width": 1024, "height": 576}
     if imagen_referencia_path:
         params["image"] = imagen_referencia_path  # debe ser URL pública
     headers = {}
