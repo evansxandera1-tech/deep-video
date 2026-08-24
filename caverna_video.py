@@ -460,12 +460,28 @@ def main():
     log.info(f"Banco de fondos listo, {time.time()-t2:.1f}s")
 
     os.makedirs(os.path.join(WORK_DIR, "escenas"), exist_ok=True)
+    total_escenas = len(escenas)
 
-    # ---------- fase 1: armar todos los prompts (llamadas a Groq, rápido) ----------
+    # ---------- reutilizar imágenes ya generadas antes para este audio ----------
+    ya_generadas = set(rclone_lsf(f"{CARPETA_IMAGENES}/{base}"))
+    if ya_generadas:
+        log.info(f"Imágenes ya generadas antes para '{base}': {len(ya_generadas)}, se reutilizan")
+
+    # ---------- fase 1: armar prompts solo de lo que falta (llamadas a Groq) ----------
     tareas = []
+    reutilizadas = []
     for i, escena in enumerate(escenas, start=1):
+        nombre = f"escena_{i:02d}.jpg"
+        salida = os.path.join(WORK_DIR, "escenas", nombre)
+
+        if nombre in ya_generadas:
+            if rclone_copyto(f"{CARPETA_IMAGENES}/{base}/{nombre}", salida):
+                log.info(f"Escena {i}: reutilizada desde Drive")
+                reutilizadas.append({"i": i, "escena": escena, "salida": salida})
+                continue
+            log.warning(f"Escena {i}: figuraba generada pero no se pudo bajar, se regenera")
+
         fondo, accion, fondo_nuevo = elegir_fondo_o_prompt(escena["texto"], descripciones)
-        salida = os.path.join(WORK_DIR, "escenas", f"escena_{i:02d}.jpg")
 
         if fondo and fondo in descripciones:
             referencia_url = rclone_link(f"{CARPETA_FONDOS}/{fondo}")
@@ -477,38 +493,40 @@ def main():
             prompt = PROMPT_ESTILO.format(accion=accion, fondo_extra=fondo_extra)
             log.info(f"Escena {i}: sin match, genera fondo nuevo ('{fondo_nuevo}') | acción: {accion}")
 
-        tareas.append({"i": i, "escena": escena, "prompt": prompt, "referencia_url": referencia_url, "salida": salida})
+        tareas.append({"i": i, "escena": escena, "prompt": prompt, "referencia_url": referencia_url, "salida": salida, "nombre": nombre})
 
-    # ---------- fase 2: generar todas las imágenes en paralelo ----------
+    # ---------- fase 2: generar en paralelo solo lo que falta, subiendo cada imagen apenas sale ----------
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     t3 = time.time()
-    resultados = {}
+    resultados = {t["i"]: True for t in reutilizadas}
 
     def _generar(tarea):
         ok = generar_imagen(tarea["prompt"], tarea["referencia_url"], tarea["salida"])
+        if ok:
+            rclone_copyto(tarea["salida"], f"{CARPETA_IMAGENES}/{base}/{tarea['nombre']}")
         return tarea["i"], ok
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futuros = [executor.submit(_generar, t) for t in tareas]
-        for futuro in as_completed(futuros):
-            i, ok = futuro.result()
-            resultados[i] = ok
-            if ok:
-                log.info(f"Escena {i}: imagen generada")
-            else:
-                log.warning(f"Escena {i} falló, se salta")
+    if tareas:
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futuros = [executor.submit(_generar, t) for t in tareas]
+            for futuro in as_completed(futuros):
+                i, ok = futuro.result()
+                resultados[i] = ok
+                if ok:
+                    log.info(f"Escena {i}: imagen generada y subida")
+                else:
+                    log.warning(f"Escena {i} falló, se salta")
 
-    escenas = [t["escena"] for t in tareas if resultados.get(t["i"])]
-    imagenes = [t["salida"] for t in tareas if resultados.get(t["i"])]
+    todas = sorted(reutilizadas + tareas, key=lambda t: t["i"])
+    escenas = [t["escena"] for t in todas if resultados.get(t["i"])]
+    imagenes = [t["salida"] for t in todas if resultados.get(t["i"])]
 
-    log.info(f"Imágenes generadas: {len(imagenes)}/{len(tareas)}, {time.time()-t3:.1f}s")
+    log.info(f"Imágenes listas: {len(imagenes)}/{total_escenas} ({len(reutilizadas)} reutilizadas), {time.time()-t3:.1f}s")
 
     if not imagenes:
         log.error("No se generó ninguna imagen, no se puede armar el video")
         return
-
-    rclone_copy(os.path.join(WORK_DIR, "escenas"), CARPETA_IMAGENES + f"/{base}")
 
     sufijo = "_demo" if LIMITE_DEMO_SEGUNDOS else ""
     srt_path = os.path.join(WORK_DIR, f"{base}{sufijo}.srt")
