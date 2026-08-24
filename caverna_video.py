@@ -460,8 +460,9 @@ def main():
     log.info(f"Banco de fondos listo, {time.time()-t2:.1f}s")
 
     os.makedirs(os.path.join(WORK_DIR, "escenas"), exist_ok=True)
-    imagenes = []
-    t3 = time.time()
+
+    # ---------- fase 1: armar todos los prompts (llamadas a Groq, rápido) ----------
+    tareas = []
     for i, escena in enumerate(escenas, start=1):
         fondo, accion, fondo_nuevo = elegir_fondo_o_prompt(escena["texto"], descripciones)
         salida = os.path.join(WORK_DIR, "escenas", f"escena_{i:02d}.jpg")
@@ -476,14 +477,32 @@ def main():
             prompt = PROMPT_ESTILO.format(accion=accion, fondo_extra=fondo_extra)
             log.info(f"Escena {i}: sin match, genera fondo nuevo ('{fondo_nuevo}') | acción: {accion}")
 
-        ok = generar_imagen(prompt, referencia_url, salida)
-        if ok:
-            imagenes.append(salida)
-        else:
-            log.warning(f"Escena {i} falló, se salta")
-        time.sleep(5 if POLLINATIONS_TOKEN else 15)  # respeta rate limit
+        tareas.append({"i": i, "escena": escena, "prompt": prompt, "referencia_url": referencia_url, "salida": salida})
 
-    log.info(f"Imágenes generadas: {len(imagenes)}/{len(escenas)}, {time.time()-t3:.1f}s")
+    # ---------- fase 2: generar todas las imágenes en paralelo ----------
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    t3 = time.time()
+    resultados = {}
+
+    def _generar(tarea):
+        ok = generar_imagen(tarea["prompt"], tarea["referencia_url"], tarea["salida"])
+        return tarea["i"], ok
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futuros = [executor.submit(_generar, t) for t in tareas]
+        for futuro in as_completed(futuros):
+            i, ok = futuro.result()
+            resultados[i] = ok
+            if ok:
+                log.info(f"Escena {i}: imagen generada")
+            else:
+                log.warning(f"Escena {i} falló, se salta")
+
+    escenas = [t["escena"] for t in tareas if resultados.get(t["i"])]
+    imagenes = [t["salida"] for t in tareas if resultados.get(t["i"])]
+
+    log.info(f"Imágenes generadas: {len(imagenes)}/{len(tareas)}, {time.time()-t3:.1f}s")
 
     if not imagenes:
         log.error("No se generó ninguna imagen, no se puede armar el video")
