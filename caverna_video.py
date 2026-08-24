@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-caverna-video v1.0
+caverna-video v1.1
 Flujo completo: toma un audio ya generado (caverna-audio), lo transcribe con
 Whisper para tener timing exacto, arma escenas, genera/reutiliza imágenes
 (stickman + fondo prehistórico) con Pollinations, arma el video final con
@@ -56,6 +56,10 @@ log = logging.getLogger("caverna-video")
 def rclone_lsf(ruta):
     r = subprocess.run(["rclone", "lsf", ruta], capture_output=True, text=True)
     if r.returncode != 0:
+        if "directory not found" in r.stderr:
+            log.warning(f"Carpeta no existe, creando: {ruta}")
+            subprocess.run(["rclone", "mkdir", ruta], capture_output=True, text=True)
+            return []
         log.error(f"rclone lsf falló en {ruta}: {r.stderr.strip()}")
         return []
     return [l.strip() for l in r.stdout.splitlines() if l.strip()]
