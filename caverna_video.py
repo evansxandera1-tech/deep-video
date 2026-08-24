@@ -323,7 +323,7 @@ def generar_imagen_pollinations(prompt, imagen_referencia_path, salida_path):
     headers = {}
     if POLLINATIONS_TOKEN:
         headers["Authorization"] = f"Bearer {POLLINATIONS_TOKEN}"
-    url = f"https://image.pollinations.ai/prompt/{quote(prompt)}"
+    url = f"https://gen.pollinations.ai/image/{quote(prompt)}"
 
     def _pedir():
         r = requests.get(url, params=params, headers=headers, timeout=180)
