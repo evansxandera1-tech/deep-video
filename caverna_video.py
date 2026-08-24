@@ -358,7 +358,7 @@ def generar_imagen_huggingface(prompt, imagen_referencia_path, salida_path):
             )
         else:
             imagen = client.text_to_image(
-                prompt, model="black-forest-labs/FLUX.1-Kontext-dev"
+                prompt, model="black-forest-labs/FLUX.1-schnell"
             )
         imagen.save(salida_path)
         return True
