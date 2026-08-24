@@ -375,6 +375,9 @@ def generar_imagen(prompt, imagen_referencia_path, salida_path):
     modelo Kontext, respeta imagen de referencia)."""
     if generar_imagen_pollinations(prompt, imagen_referencia_path, salida_path):
         return True
+    if not HF_API_TOKEN:
+        return False
+
     log.warning("Pollinations falló, probando fallback con Hugging Face (Kontext)")
     return generar_imagen_huggingface(prompt, imagen_referencia_path, salida_path)
 
