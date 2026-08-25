@@ -544,12 +544,14 @@ def main():
     generar_srt(segmentos, srt_path)
 
     t4 = time.time()
-    video_path = os.path.join(WORK_DIR, f"{base}{sufijo}.mp4")
+    sello = time.strftime("%Y%m%d_%H%M%S")
+    nombre_video = f"{base}{sufijo}_{sello}.mp4"
+    video_path = os.path.join(WORK_DIR, nombre_video)
     armar_video(escenas[:len(imagenes)], imagenes, audio_local, srt_path, video_path)
     log.info(f"Video armado, {time.time()-t4:.1f}s")
 
-    if rclone_copyto(video_path, f"{CARPETA_VIDEOS}/{base}{sufijo}.mp4"):
-        log.info(f"Subido: {base}{sufijo}.mp4 -> {CARPETA_VIDEOS}")
+    if rclone_copyto(video_path, f"{CARPETA_VIDEOS}/{nombre_video}"):
+        log.info(f"Subido: {nombre_video} -> {CARPETA_VIDEOS}")
 
     log.info(f"=== Fin caverna-video, total {time.time()-t0:.1f}s ===")
 
