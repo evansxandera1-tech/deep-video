@@ -495,9 +495,12 @@ def main():
         fondo, accion, fondo_nuevo = elegir_fondo_o_prompt(escena["texto"], descripciones)
 
         if fondo and fondo in descripciones:
-            referencia_url = rclone_link(f"{CARPETA_FONDOS}/{fondo}")
-            prompt = PROMPT_ESTILO.format(accion=accion, fondo_extra="")
-            log.info(f"Escena {i}: usando fondo existente '{fondo}' | acción: {accion}")
+            # siempre se usa la referencia del personaje (para consistencia),
+            # el fondo existente se describe en texto, no como imagen de referencia
+            referencia_url = rclone_link(f"{CARPETA_FONDOS}/{REFERENCIA_STICKMAN_NOMBRE}")
+            fondo_extra = f"background: {descripciones[fondo]}. "
+            prompt = PROMPT_ESTILO.format(accion=accion, fondo_extra=fondo_extra)
+            log.info(f"Escena {i}: usando fondo existente '{fondo}' (como texto) | acción: {accion}")
         else:
             referencia_url = rclone_link(f"{CARPETA_FONDOS}/{REFERENCIA_STICKMAN_NOMBRE}")
             fondo_extra = f"background: {fondo_nuevo}. " if fondo_nuevo else ""
