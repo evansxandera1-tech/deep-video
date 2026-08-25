@@ -293,8 +293,10 @@ def elegir_fondo_o_prompt(texto_escena, descripciones):
         f"Scene narration text: \"{texto_escena}\"\n\n"
         "Reply with ONLY a JSON object, no explanation:\n"
         '{"fondo": "<exact filename from the list, or null if none fit well>", '
-        '"accion": "<short phrase describing what the stickman character is doing in this scene, in English>", '
-        '"fondo_nuevo": "<if fondo is null, a short phrase describing the new background needed, else empty string>"}'
+        '"accion": "<vivid, specific phrase describing what the stickman character is doing and how, '
+        'with concrete visual detail (pose, expression, objects involved), in English, 10-20 words>", '
+        '"fondo_nuevo": "<if fondo is null, a vivid and specific phrase describing the new background needed, '
+        'mentioning colors, light source and setting details, in English, 8-15 words, else empty string>"}'
     )
     try:
         respuesta = groq_chat([{"role": "user", "content": instruccion}])
@@ -309,10 +311,15 @@ def elegir_fondo_o_prompt(texto_escena, descripciones):
 # ---------- paso 6: generar imagen con Pollinations ----------
 
 PROMPT_ESTILO = (
-    "2D cartoon illustration, a simple stickman-style prehistoric human wearing "
-    "a tattered animal skin tunic, {accion}, {fondo_extra}"
+    "2D cartoon illustration, vivid and richly saturated colors, a simple "
+    "stickman-style prehistoric human wearing a tattered animal skin tunic, "
+    "{accion}, {fondo_extra}"
+    "Vibrant color palette (warm oranges, deep blues, rich greens) with dynamic "
+    "lighting and glowing highlights even in dim or night settings, avoid flat, "
+    "muddy or desaturated tones. Highly detailed, richly textured background. "
     "The contrast between the simple flat stickman character and the "
-    "realistically painted detailed background is key. No text, no watermark."
+    "realistically painted, vividly colored detailed background is key. "
+    "No text, no watermark."
 )
 REFERENCIA_STICKMAN_NOMBRE = "referencia_stickman.jpg"  # debe existir en caverna-fondos
 
