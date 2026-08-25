@@ -288,15 +288,19 @@ def groq_chat(mensajes, modelo="openai/gpt-oss-120b"):
 def elegir_fondo_o_prompt(texto_escena, descripciones):
     lista = "\n".join(f"- {archivo}: {desc}" for archivo, desc in descripciones.items())
     instruccion = (
-        "You choose a background image for an animated scene about prehistoric humans.\n"
+        "You are art-directing a single scene for an animated video about prehistoric humans.\n"
         f"Available backgrounds:\n{lista}\n\n"
         f"Scene narration text: \"{texto_escena}\"\n\n"
         "Reply with ONLY a JSON object, no explanation:\n"
         '{"fondo": "<exact filename from the list, or null if none fit well>", '
-        '"accion": "<vivid, specific phrase describing what the stickman character is doing and how, '
-        'with concrete visual detail (pose, expression, objects involved), in English, 10-20 words>", '
-        '"fondo_nuevo": "<if fondo is null, a vivid and specific phrase describing the new background needed, '
-        'mentioning colors, light source and setting details, in English, 8-15 words, else empty string>"}'
+        '"accion": "<vivid, specific phrase (12-25 words) describing exactly what is happening in THIS narration. '
+        'You MUST include any concrete objects, artifacts or actions the narration text explicitly mentions '
+        '(e.g. skulls, graves, ochre, tools, fire, bones, drawings, etc.) so the image matches the script, not a generic scene. '
+        'Vary the character pose, gesture and facial expression scene to scene (crouching, pointing, examining, recoiling, '
+        'kneeling, reaching out, etc.) — avoid defaulting to a plain standing pose unless the narration truly only supports that, '
+        'in English>", '
+        '"fondo_nuevo": "<if fondo is null, a vivid and specific phrase (10-18 words) describing the new background needed, '
+        'matching any setting or objects mentioned in the narration text, including colors and light source, in English, else empty string>"}'
     )
     try:
         respuesta = groq_chat([{"role": "user", "content": instruccion}])
